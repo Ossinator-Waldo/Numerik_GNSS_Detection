@@ -1,0 +1,112 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+from math import radians, sin, cos, sqrt, atan2
+
+# === Haversine-Distanz (horizontal) ===
+def haversine_dist(coord1, coord2):
+    R = 6371000  # Erdradius in Metern
+    lat1, lon1 = radians(coord1[0]), radians(coord1[1])
+    lat2, lon2 = radians(coord2[0]), radians(coord2[1])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return R * c
+
+# === Parser: lat, lon, alt aus Fix-Zeilen ===
+def parse_fix_lines(file_path):
+    coords = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            if line.startswith("Fix,"):
+                parts = line.strip().split(",")
+                if len(parts) >= 5:
+                    try:
+                        lat = float(parts[2])
+                        lon = float(parts[3])
+                        alt = float(parts[4])
+                        coords.append((lat, lon, alt))
+                    except ValueError:
+                        continue
+    return coords
+
+# === Monte-Carlo-Genauigkeit ===
+def monte_carlo_accuracy(coords2d, reference2d, iterations=1000, sample_size=50):
+    errors = []
+    for _ in range(iterations):
+        sample = random.sample(coords2d, min(sample_size, len(coords2d)))
+        for pt in sample:
+            errors.append(haversine_dist(reference2d, pt))
+    return errors
+
+# === Datei einlesen und Daten extrahieren ===
+file_path = "GNSLoggerKaLi.txt"  # Pfad zur Logdatei anpassen
+coords3d = parse_fix_lines(file_path)
+if len(coords3d) < 2:
+    raise RuntimeError("Zu wenige Fix-Einträge gefunden")
+
+# 2D-Koordinaten und Altitudes extrahieren
+coords2d = [(lat, lon) for lat, lon, alt in coords3d]
+alts = [alt for lat, lon, alt in coords3d]
+
+# Referenz (Mittelwert)
+lats, lons, = zip(*coords2d)
+ref_lat, ref_lon = np.mean(lats), np.mean(lons)
+ref_alt = np.mean(alts)
+ref_pos2d = (ref_lat, ref_lon)
+
+# Fehlerliste
+errors = monte_carlo_accuracy(coords2d, ref_pos2d)
+
+# Google Maps URL generieren
+google_maps_url = f"https://www.google.com/maps?q={ref_lat},{ref_lon}"
+
+# Ausgabe der berechneten Position und Google Maps-Link
+print(f"Berechnete Position:\nLatitude: {ref_lat:.8f}°\nLongitude: {ref_lon:.8f}°\nHöhe: {ref_alt:.2f} m")
+print(f"Google Maps-Link zur Überprüfung: {google_maps_url}")
+
+# === Visualisierung ===
+fig, ax = plt.subplots(figsize=(10, 10))
+
+# Umrechnung Meter → Grad
+m_to_deg = 1 / 111319.5  # Umrechnung Meter → Grad
+for idx, ((lat, lon), err) in enumerate(zip(coords2d, errors[:len(coords2d)]), start=1):
+    radius_deg = err * m_to_deg
+    circle = plt.Circle((lon, lat), radius_deg, edgecolor='tab:blue', facecolor='tab:blue', alpha=0.1)
+    ax.add_artist(circle)
+    # Beschrifte den Radius in Metern oberhalb des Kreises
+    ax.text(lon, lat + radius_deg + 0.00002, f"S{idx}: {err:.1f} m", 
+            ha='center', va='bottom', fontsize=8, color='tab:blue')
+
+# Plot Referenzposition
+ax.plot(ref_pos2d[1], ref_pos2d[0], 'ro', markersize=8, label="Referenzposition")
+
+# Visualisiere den Schnittbereich (kleinste Fehlermenge)
+min_err = min(errors)
+min_rad_deg = min_err * m_to_deg
+intersection = plt.Circle((ref_pos2d[1], ref_pos2d[0]), min_rad_deg,
+                          edgecolor='red', facecolor='red', alpha=0.3,
+                          label=f"Schnittbereich: {min_err:.1f} m")
+ax.add_artist(intersection)
+
+# Achsenlimits und Layout
+margin = max(errors[:len(coords2d)]) * m_to_deg + 0.0001
+ax.set_xlim(min(lons)-margin, max(lons)+margin)
+ax.set_ylim(min(lats)-margin, max(lats)+margin)
+ax.set_xlabel("Longitude")
+ax.set_ylabel("Latitude")
+ax.set_title("Satellitenkreise mit individuellen Radii und Überlappungsbereich")
+ax.legend(loc='upper right')
+ax.grid(True)
+
+# Balkendiagramm der Abweichungen
+plt.figure(figsize=(10, 6))
+plt.bar(range(1, len(errors[:len(coords2d)])+1), errors[:len(coords2d)], color='skyblue')
+plt.axhline(np.mean(errors), color='red', linestyle='--', label=f"⌀ Fehler: {np.mean(errors):.2f} m")
+plt.title("Individuelle Abweichungen pro Satellit")
+plt.xlabel("Satellitennummer")
+plt.ylabel("Abweichung (m)")
+plt.legend()
+plt.tight_layout()
+plt.show()
